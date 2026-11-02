@@ -1,0 +1,16 @@
+# Helm values for MetalLB in the RouterOS BGP lab (chart metallb/metallb, see README.md).
+#
+# FRR-K8s mode is the chart's default backend. It is written out here because the lab
+# depends on it: BFD (bfd.yaml) works only with an FRR-based backend, not in native mode.
+frrk8s:
+  enabled: true
+  # Use the frr-k8s subchart bundled with MetalLB.
+  external: false
+
+speaker:
+  # The deprecated FRR mode (FRR inside the speaker pod). Mutually exclusive with frrk8s.
+  frr:
+    enabled: false
+  # Respect kind's node.kubernetes.io/exclude-from-external-load-balancers label on the
+  # control-plane node, so only the worker announces LoadBalancer IPs.
+  ignoreExcludeLB: false

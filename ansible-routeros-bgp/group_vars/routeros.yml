@@ -1,0 +1,31 @@
+---
+# Router interface bridged to the kind network (two-network mode in ../compose.yml).
+routeros_lan_interface: ether2
+# Must match the ipv4_address of the routeros service on the kind network.
+routeros_lan_address: 172.18.0.250/16
+# Used to check that routeros_lan_interface really is the bridged NIC. Skipped if missing.
+routeros_nic_mac_file: "{{ inventory_dir }}/../routeros_data/nic_mac"
+
+# BGP on the router
+bgp_instance_name: lab
+bgp_local_as: 64512
+# ECMP: install up to this many equal routes (set to the number of worker nodes).
+bgp_multipath: 2
+bgp_connection_name: metallb
+bgp_filter_chain: metallb-in
+
+# MetalLB side. Set metallb_as equal to bgp_local_as for iBGP; otherwise eBGP is used.
+metallb_as: 64513
+# Subnet of the kind network: any node in it may open a BGP session.
+metallb_peer_range: 172.18.0.0/16
+# Only prefixes inside this range are accepted. Must contain the MetalLB IPAddressPool.
+metallb_pool_prefix: 10.250.0.0/24
+
+# BFD needs MetalLB in FRR or FRR-K8s mode, with a BFDProfile on the BGPPeer.
+bfd_enabled: true
+bfd_min_rx: 1s
+bfd_min_tx: 1s
+bfd_multiplier: 3
+
+# Every object this playbook creates carries this comment, followed by ": <key>".
+routeros_comment_prefix: managed by ansible

@@ -1,0 +1,60 @@
+# Minimal RouterOS lab for Apple Silicon (no KVM: RouterOS runs under QEMU emulation).
+# Two networks: "default" keeps the published management ports (ether1, QEMU NAT);
+# "kind" is bridged into the guest as ether2, next to the Kubernetes nodes.
+# Create the kind cluster first (kind/cluster.yaml). Expect 2-4 minutes for the first boot.
+services:
+
+  routeros:
+    # Latest image
+    # image: evilfreelancer/docker-routeros:latest
+    # or exact same version
+    image: evilfreelancer/docker-routeros:7.23.8
+    # or minor version
+    #image: evilfreelancer/docker-routeros:7.20
+    # or major version
+    #image: evilfreelancer/docker-routeros:7
+    # or build from sources
+    #build:
+    #  context: .
+    #  dockerfile: Dockerfile
+    #  args:
+    #    - ROUTEROS_VERSION=7.20.8
+    restart: unless-stopped
+    # Needed for the kind network bridge: the entrypoint moves the container's kind
+    # interface into a Linux bridge (NET_ADMIN) and QEMU plugs a TAP device into it (tun).
+    # Both work on arm64 Docker Desktop; only /dev/kvm is unavailable on Apple Silicon.
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    # Extra QEMU args override the entrypoint defaults (512 MB, 4 vCPUs):
+    # 256 MB guest RAM, 1 vCPU, and a 64 MB translation cache to keep emulation memory bounded.
+    command: ["-m", "256", "-smp", "1,sockets=1,cores=1,threads=1", "-accel", "tcg,tb-size=64"]
+    cpus: "1.0"
+    mem_limit: 512m # guest RAM + QEMU overhead; lowering this risks OOM kills
+    environment:
+      ROUTEROS_DISK2_SIZE: "64M"
+    ports:
+      - "127.0.0.1:8080:80"     # WebFig
+      - "127.0.0.1:8291:8291"   # Winbox
+      - "127.0.0.1:2222:22"     # SSH
+      - "127.0.0.1:2223:23"     # Telnet
+      - "127.0.0.1:8728:8728"   # API
+      - "127.0.0.1:8729:8729"   # API-SSL
+    volumes:
+      - ./routeros_data:/data
+      # Run this repo's entrypoint instead of the one baked into the image. The image's copy
+      # gives the bridged interface the guest's MAC, so unicast traffic (BGP, SSH) never
+      # reaches RouterOS's ether2. Fixed in scripts/entrypoint.sh (prepare_intf).
+      - ./scripts/entrypoint.sh:/routeros_source/entrypoint.sh:ro
+    networks:
+      default:
+        gw_priority: 1   # stays the uplink, so the published ports keep working
+      kind:
+        # Handed to RouterOS as ether2's address. Not .0 (network) or .1 (gateway);
+        # kind nodes take addresses from the start of the range.
+        ipv4_address: 172.18.0.250
+
+networks:
+  kind:
+    external: true

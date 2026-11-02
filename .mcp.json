@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mikrotik": {
+      "command": "uvx",
+      "args": ["mcp-server-mikrotik"],
+      "env": {
+        "MIKROTIK_HOST": "127.0.0.1",
+        "MIKROTIK_PORT": "2222",
+        "MIKROTIK_COMMAND_TIMEOUT": "180"
+      }
+    }
+  }
+}

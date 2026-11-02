@@ -1,0 +1,5 @@
+{
+    "yaml.schemas": {
+        "https://www.schemastore.org/kind-cluster.json": "file:///Users/nazordz/network-projects/docker-routeros/kind/cluster.yaml"
+    }
+}

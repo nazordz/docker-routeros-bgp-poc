@@ -1,0 +1,31 @@
+---
+# Creates, updates or removes one RouterOS object, found by its comment.
+# Expects `obj` with: desc, path, key, props (when present) and optional state (present | absent).
+#
+# The router reports what it did: the object is serialized before and after `set`,
+# so a re-run with the same settings reports "unchanged".
+- name: "{{ obj.desc }}"
+  vars:
+    ros_comment: "{{ routeros_comment_prefix }}: {{ obj.key }}"
+    ros_script: |
+      :local ids [{{ obj.path }}/find where comment="{{ ros_comment }}"];
+      {% if obj.state | default('present') == 'present' %}
+      :if ([:len $ids] = 0) do={
+        {{ obj.path }}/add {{ obj.props }} comment="{{ ros_comment }}";
+        :put "RESULT=added"
+      } else={
+        :local id [:pick $ids 0];
+        :local before [:serialize to=json [{{ obj.path }}/get $id]];
+        {{ obj.path }}/set $id {{ obj.props }};
+        :if ($before = [:serialize to=json [{{ obj.path }}/get $id]]) do={ :put "RESULT=unchanged" } else={ :put "RESULT=updated" }
+      }
+      {% else %}
+      :if ([:len $ids] = 0) do={ :put "RESULT=unchanged" } else={ {{ obj.path }}/remove $ids; :put "RESULT=removed" }
+      {% endif %}
+  community.routeros.command:
+    # The RouterOS console takes one line per command.
+    commands:
+      - "{{ ros_script | regex_replace('\\s*\\n\\s*', ' ') | trim }}"
+  register: ensure_result
+  changed_when: "'RESULT=unchanged' not in ensure_result.stdout[0]"
+  failed_when: "'RESULT=' not in ensure_result.stdout[0]"

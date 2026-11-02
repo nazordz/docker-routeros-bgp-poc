@@ -1,0 +1,18 @@
+# Optional: BFD for the BGP session to RouterOS (FRR-K8s or FRR mode only, not native).
+#
+#   kubectl --context kind-routeros-lab apply -f metallb/bfd.yaml
+#   then uncomment `bfdProfile: lab-bfd` in bgp.yaml and apply it again,
+#   and set bfd_enabled: true in ../ansible/group_vars/routeros.yml and run the playbook.
+#
+# Timers match the router side (1s x 3). The router is emulated, so shorter intervals
+# can make the session flap.
+---
+apiVersion: metallb.io/v1beta1
+kind: BFDProfile
+metadata:
+  name: lab-bfd
+  namespace: metallb-system
+spec:
+  receiveInterval: 1000
+  transmitInterval: 1000
+  detectMultiplier: 3

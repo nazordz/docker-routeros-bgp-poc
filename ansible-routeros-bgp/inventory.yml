@@ -1,0 +1,21 @@
+---
+routeros:
+  hosts:
+    routeros-lab:
+      # SSH port published by ../compose.yml
+      ansible_host: 127.0.0.1
+      ansible_port: 2222
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    # uvx installs paramiko; skip the ansible-pylibssh lookup and its warning.
+    ansible_network_cli_ssh_type: paramiko
+    # Credentials come from the encrypted host_vars/routeros-lab.yml (Ansible Vault, see
+    # README.md). Without it, the MIKROTIK_USERNAME / MIKROTIK_PASSWORD environment variables are used.
+    # "+cet1024w" turns off colors and line wrapping in the RouterOS console.
+    ansible_user: >-
+      {{ vault_mikrotik_username
+         | default(lookup('ansible.builtin.env', 'MIKROTIK_USERNAME', default='admin'), true) }}+cet1024w
+    ansible_password: >-
+      {{ vault_mikrotik_password
+         | default(lookup('ansible.builtin.env', 'MIKROTIK_PASSWORD'), true) }}

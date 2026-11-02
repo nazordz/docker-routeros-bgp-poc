@@ -1,0 +1,26 @@
+# kind cluster for the RouterOS + MetalLB BGP lab.
+#
+#   kind create cluster --config kind/cluster.yaml
+#   kubectl --context kind-routeros-lab get nodes
+#   kind delete cluster --name routeros-lab
+#
+# kind puts the nodes on the Docker network "kind". Attach the RouterOS container to that
+# network (see ../ansible/README.md) so MetalLB can peer with it over BGP.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: routeros-lab   # kubectl context: kind-routeros-lab
+
+networking:
+  # Defaults, written out to show they don't overlap the MetalLB pool (10.250.0.0/24)
+  # or the kind Docker network (172.x.0.0/16).
+  podSubnet: 10.244.0.0/16
+  serviceSubnet: 10.96.0.0/16
+  # The API server is only reachable from this Mac.
+  apiServerAddress: 127.0.0.1
+
+nodes:
+  # kind labels the control-plane node node.kubernetes.io/exclude-from-external-load-balancers,
+  # so MetalLB does not announce LoadBalancer IPs from it.
+  - role: control-plane
+  # MetalLB announces from this node; it is the BGP peer RouterOS sees.
+  - role: worker

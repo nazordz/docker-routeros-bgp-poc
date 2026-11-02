@@ -107,7 +107,6 @@ class EntrypointNetworkingTests(unittest.TestCase):
         ip_commands = [args for name, *args in commands if name == "ip"]
         self.assertIn(["addr", "flush", "dev", "eth1"], ip_commands)
         self.assertIn(["link", "set", "dev", "eth1", "master", "qemubr1"], ip_commands)
-        self.assertIn(["link", "set", "dev", "eth1", "address", "02:00:00:00:00:85"], ip_commands)
         self.assertIn(["link", "set", "dev", "eth1", "promisc", "on"], ip_commands)
         self.assertFalse(any("eth0" in args for args in ip_commands))
         self.assertIn(
@@ -117,6 +116,16 @@ class EntrypointNetworkingTests(unittest.TestCase):
         self.assertIn(
             ["udhcpd", "-I", "10.0.0.1", "-f", str(self.routeros / "dhcpd.conf")],
             commands,
+        )
+
+    def test_two_networks_keep_docker_mac_on_bridge_port(self):
+        commands = self.run_entrypoint(two_networks=True)
+        ip_commands = [args for name, *args in commands if name == "ip"]
+        # The guest NIC owns ROUTEROS_NIC_MAC. Giving the bridge port the same MAC makes the
+        # bridge deliver unicast frames for the guest locally instead of to the TAP device.
+        self.assertFalse(
+            any(args[:4] == ["link", "set", "dev", "eth1"] and "address" in args for args in ip_commands),
+            ip_commands,
         )
 
     def test_two_networks_keep_user_and_tap_nics(self):

@@ -1,0 +1,201 @@
+Metadata-Version: 2.4
+Name: ansible-routeros-bgp
+Version: 0.1.0
+Summary: Add your description here
+Author-email: Naufal <nazor.dz@gmail.com>
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+
+# Ansible: configure RouterOS for MetalLB BGP
+
+This playbook turns the RouterOS lab router from `../compose.yml` into the BGP peer for
+MetalLB in a local kind cluster. It connects over SSH (`127.0.0.1:2222`) and sets up:
+
+| Object | Default |
+| --- | --- |
+| IP address on the interface bridged to the kind network | `172.19.0.250/16` on `ether2` |
+| Route filter: accept only the MetalLB pool | chain `metallb-in`, accepts `10.250.0.0/24` |
+| BGP instance | `lab`, AS `64512`, router ID `172.19.0.250`, multipath `2` |
+| BGP connection: wait for any kind node to connect | `metallb`, eBGP with AS `64513`, listens on `172.19.0.0/16` |
+| BFD (optional) | off |
+
+See `../NOTES.md` for what BGP, BFD and FRR are.
+
+It is safe to run repeatedly. Every object it creates has a comment starting with
+`managed by ansible:`. That comment is how the playbook finds the object again: a second
+run updates it in place and reports `ok` (unchanged) instead of creating a duplicate.
+
+## Files
+
+| File | Purpose |
+| --- | --- |
+| `configure-router.yml` | The playbook: preflight checks, configuration, verification |
+| `tasks/ensure.yml` | Creates, updates or removes one RouterOS object |
+| `group_vars/routeros.yml` | **The settings you edit**: addresses, AS numbers, BFD |
+| `inventory.yml` | How to reach the router; reads the password from the environment |
+| `ansible.cfg` | Points at the inventory and sets longer timeouts for the emulated router |
+| `requirements.yml` | Ansible collections needed |
+
+## Before you run it
+
+### 1. The router must be on the kind network
+
+In single-network mode the router only has `ether1` (QEMU's NAT) and cannot peer with
+MetalLB. The preflight check stops with a clear message in that case. Create the kind
+cluster first, then attach the router to the `kind` network in `../compose.yml`:
+
+```yaml
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun]
+    networks:
+      default:
+        gw_priority: 1
+      kind:
+        ipv4_address: 172.19.0.250   # same as routeros_lan_address
+
+networks:
+  kind:
+    external: true
+```
+
+`docker compose up -d` then recreates the router. **This resets RouterOS**: log in to
+WebFig at `http://127.0.0.1:8080` as `admin` with an empty password and set your password
+again before running the playbook.
+
+### 2. Match the settings to your kind network
+
+```bash
+docker network inspect kind -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
+```
+
+If the IPv4 subnet is not `172.19.0.0/16`, change these in `group_vars/routeros.yml`
+(and the `ipv4_address` in `compose.yml`):
+
+- `routeros_lan_address`, for example `172.20.0.250/16`
+- `metallb_peer_range`, for example `172.20.0.0/16`
+
+`metallb_pool_prefix` must contain the addresses in MetalLB's `IPAddressPool`, and must be
+outside the kind subnet.
+
+### 3. Install the dependencies
+
+Ansible runs through [uv](https://docs.astral.sh/uv/)'s `uvx`, so nothing is installed into
+your system or pyenv Python. `uvx` builds a cached environment with `ansible-core` and
+`paramiko` (needed for SSH) on the first run and reuses it afterwards.
+
+Define two short aliases for this shell session:
+
+```bash
+alias ap="uvx --from 'ansible-core>=2.16' --with paramiko ansible-playbook"
+alias ag="uvx --from 'ansible-core>=2.16' ansible-galaxy"
+```
+
+Then install the collections. `ansible.cfg` sets `collections_path = ./collections`, so they
+go into `ansible/collections/` (git-ignored), where the `uvx` Ansible finds them:
+
+```bash
+cd ansible
+ag collection install -r requirements.yml
+```
+
+Without the aliases, use the full commands, for example
+`uvx --from 'ansible-core>=2.16' --with paramiko ansible-playbook configure-router.yml`.
+
+### 4. Provide the router password
+
+The inventory reads it from the environment, so it is never stored in this folder:
+
+```bash
+export MIKROTIK_PASSWORD='your-routeros-password'
+# optional, default is admin
+export MIKROTIK_USERNAME=admin
+```
+
+## Run it
+
+Run everything from this `ansible/` folder, so `ansible.cfg` is picked up. `ap` is the
+alias from step 3.
+
+```bash
+# 1. Read-only: check the connection, the RouterOS version and the interface
+ap configure-router.yml --tags preflight
+
+# 2. Apply the configuration and show the BGP state
+ap configure-router.yml
+
+# 3. Run again: everything should be "ok", changed=0
+ap configure-router.yml
+```
+
+Other useful runs:
+
+```bash
+# Only show BGP sessions and routes (read-only)
+ap configure-router.yml --tags verify
+
+# Override a setting for one run
+ap configure-router.yml -e bgp_multipath=3
+```
+
+The preflight checks run on every invocation. They stop the run if:
+
+- RouterOS has no `/routing/bgp/instance` menu (too old a RouterOS 7)
+- the LAN interface (`ether2`) does not exist
+- the interface's MAC differs from `../routeros_data/nic_mac`, which means it is not the
+  NIC bridged to the kind network
+
+## After MetalLB is installed
+
+The router only listens; MetalLB's speakers open the sessions. Once MetalLB is configured
+with a `BGPPeer` pointing at `172.19.0.250` (`myASN: 64513`, `peerASN: 64512`) and a
+LoadBalancer Service has an IP:
+
+```bash
+ap configure-router.yml --tags verify
+```
+
+You should see one established session per worker node, and a `/32` route for each
+LoadBalancer IP with a worker node as gateway.
+
+## Options
+
+### iBGP instead of eBGP
+
+Set `metallb_as` to the same value as `bgp_local_as` (for example both `64512`). The
+playbook then uses `local.role=ibgp`. Use the same AS in MetalLB's `BGPPeer`.
+
+### BFD
+
+Set `bfd_enabled: true`. The playbook adds a `/routing/bfd/configuration` entry for the
+LAN interface and sets `use-bfd=yes` on the BGP connection. Setting it back to `false`
+removes both again.
+
+MetalLB must run in FRR or FRR-K8s mode, with a `BFDProfile` referenced from the
+`BGPPeer`; native mode has no BFD. The default timers (1s × 3) are deliberately relaxed
+because the router is emulated; shorter timers can make sessions flap.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+| --- | --- |
+| `Authentication failed` | `MIKROTIK_PASSWORD` not exported in this shell, or the router was recreated and still has an empty password |
+| `host key mismatch for 127.0.0.1` | The router got a new SSH host key (the container was recreated). Remove the old one with `ssh-keygen -R '[127.0.0.1]:2222'` and run again. `host_key_checking = False` does not prevent this with `ansible.netcommon` 8.x |
+| `paramiko is not installed` | Ran plain `ansible-playbook` instead of the `uvx ... --with paramiko` command from step 3 |
+| `couldn't resolve module/action 'community.routeros.command'` | Collections missing: run `ag collection install -r requirements.yml` in this folder |
+| `Connection timed out` / `command timeout` | Router still booting (2-4 minutes under emulation). Wait, or raise the timeouts in `ansible.cfg` |
+| `ether2 does not exist` | Router is in single-network mode; see step 1 |
+| A config task fails with `'RESULT=' not in ...` | RouterOS rejected the command. Run with `-v` to see its message, for example `bad parameter` or `invalid value` |
+| Session not established | Check `kubectl -n metallb-system logs -l component=speaker`, the AS numbers, and that the router IP matches `peerAddress` |
+
+## Remove the configuration
+
+Everything the playbook created carries the `managed by ansible` comment. In the RouterOS
+terminal:
+
+```routeros
+/routing/bgp/connection/remove [find comment~"managed by ansible"]
+/routing/bgp/instance/remove [find comment~"managed by ansible"]
+/routing/filter/rule/remove [find comment~"managed by ansible"]
+/routing/bfd/configuration/remove [find comment~"managed by ansible"]
+/ip/address/remove [find comment~"managed by ansible"]
+```

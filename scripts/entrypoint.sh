@@ -41,7 +41,9 @@ DHCPD_CONF_FILE='/routeros/dhcpd.conf'
 
 function prepare_intf() {
    ip addr flush dev $1
-   ip link set dev $1 address $ROUTEROS_NIC_MAC
+   # Keep the Docker-assigned MAC on $1. Only the guest NIC uses ROUTEROS_NIC_MAC: if the
+   # bridge port had the same MAC, the bridge would treat frames to the guest as local and
+   # never forward them to the TAP device (ARP broadcasts would work, unicast would not).
    ip link add $2 type bridge
    ip link set dev $1 master $2
    ip link set dev $1 up

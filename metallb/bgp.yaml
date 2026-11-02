@@ -1,0 +1,49 @@
+# MetalLB BGP config: peer with the RouterOS lab router and hand out LoadBalancer IPs.
+#
+# Apply after MetalLB is installed with Helm (FRR-K8s mode, values.yaml; see README.md):
+#
+#   kubectl --context kind-routeros-lab apply -f metallb/bgp.yaml
+#
+# Must match ../ansible-routeros-bgp/group_vars/routeros.yml:
+#   peerAddress = routeros_lan_address (without /16)   myASN   = metallb_as
+#   peerASN     = bgp_local_as                         addresses inside metallb_pool_prefix
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: lab-pool
+  namespace: metallb-system
+spec:
+  # Outside the kind Docker network, so traffic has to be routed via RouterOS.
+  addresses:
+    - 10.250.0.10-10.250.0.50
+---
+apiVersion: metallb.io/v1beta2
+kind: BGPPeer
+metadata:
+  name: routeros
+  namespace: metallb-system
+spec:
+  myASN: 64513
+  peerASN: 64512
+  peerAddress: 172.18.0.250
+  # Only peer from worker nodes. kind's control-plane node is excluded from announcing
+  # LoadBalancer IPs anyway, so a session from it would carry no routes.
+  nodeSelectors:
+    - matchExpressions:
+        - key: node-role.kubernetes.io/control-plane
+          operator: DoesNotExist
+  # Uncomment after applying bfd.yaml and setting bfd_enabled: true in the Ansible vars.
+  bfdProfile: lab-bfd
+---
+apiVersion: metallb.io/v1beta1
+kind: BGPAdvertisement
+metadata:
+  name: lab-adv
+  namespace: metallb-system
+spec:
+  # Announce each LoadBalancer IP as a /32 (the default), only for this pool and peer.
+  ipAddressPools:
+    - lab-pool
+  peers:
+    - routeros

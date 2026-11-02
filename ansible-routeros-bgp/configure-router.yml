@@ -1,0 +1,127 @@
+---
+- name: Configure RouterOS as the BGP peer for MetalLB
+  hosts: routeros
+  gather_facts: false
+
+  vars:
+    routeros_router_id: "{{ routeros_lan_address.split('/')[0] }}"
+    bgp_role: "{{ 'ibgp' if (metallb_as | int) == (bgp_local_as | int) else 'ebgp' }}"
+    # Applied in this order; the BGP connection refers to the instance and the filter chain.
+    routeros_objects:
+      - desc: "IP address {{ routeros_lan_address }} on {{ routeros_lan_interface }}"
+        path: /ip/address
+        key: lan-address
+        props: "address={{ routeros_lan_address }} interface={{ routeros_lan_interface }}"
+      - desc: "BFD on {{ routeros_lan_interface }} ({{ 'present' if bfd_enabled else 'absent' }})"
+        path: /routing/bfd/configuration
+        key: bfd
+        state: "{{ 'present' if bfd_enabled else 'absent' }}"
+        props: >-
+          interfaces={{ routeros_lan_interface }} min-rx={{ bfd_min_rx }}
+          min-tx={{ bfd_min_tx }} multiplier={{ bfd_multiplier }}
+      - desc: "Route filter {{ bgp_filter_chain }} (accept {{ metallb_pool_prefix }})"
+        path: /routing/filter/rule
+        key: "{{ bgp_filter_chain }}"
+        props: 'chain={{ bgp_filter_chain }} rule="if (dst in {{ metallb_pool_prefix }}) { accept }"'
+      - desc: "BGP instance {{ bgp_instance_name }} (AS {{ bgp_local_as }})"
+        path: /routing/bgp/instance
+        key: bgp-instance
+        props: >-
+          name={{ bgp_instance_name }} as={{ bgp_local_as }}
+          router-id={{ routeros_router_id }} multipath={{ bgp_multipath }}
+      - desc: "BGP connection {{ bgp_connection_name }} ({{ bgp_role }} with AS {{ metallb_as }})"
+        path: /routing/bgp/connection
+        key: bgp-connection
+        props: >-
+          name={{ bgp_connection_name }} instance={{ bgp_instance_name }}
+          local.role={{ bgp_role }} local.address={{ routeros_router_id }}
+          remote.address={{ metallb_peer_range }} remote.as={{ metallb_as }}
+          listen=yes connect=no input.filter={{ bgp_filter_chain }}
+          use-bfd={{ 'yes' if bfd_enabled else 'no' }}
+
+  tasks:
+    - name: Preflight checks
+      tags: [preflight, always]
+      block:
+        - name: Read RouterOS version, LAN interface MAC and BGP menus
+          community.routeros.command:
+            commands:
+              - ":put [/system/resource/get version]"
+              - >-
+                :local ids [/interface/ethernet/find where name="{{ routeros_lan_interface }}"];
+                :if ([:len $ids] = 0) do={ :put "MAC=none" }
+                else={ :put ("MAC=" . [/interface/ethernet/get [:pick $ids 0] mac-address]) }
+              - "/console/inspect request=child path=routing,bgp"
+          register: preflight
+          changed_when: false
+
+        - name: Check that RouterOS has the /routing/bgp/instance menu
+          ansible.builtin.assert:
+            that:
+              - preflight.stdout[2] is regex('child +instance +dir')
+            fail_msg: >-
+              RouterOS {{ preflight.stdout[0] }} has no /routing/bgp/instance menu.
+              Use a newer RouterOS 7 image.
+            quiet: true
+
+        - name: Check that {{ routeros_lan_interface }} exists
+          ansible.builtin.assert:
+            that:
+              - "'MAC=none' not in preflight.stdout[1]"
+            fail_msg: >-
+              {{ routeros_lan_interface }} does not exist. The router is probably in
+              single-network mode: attach it to the kind network first (see README.md).
+            quiet: true
+
+        - name: Check that {{ routeros_lan_interface }} is the bridged NIC
+          ansible.builtin.assert:
+            that:
+              - >-
+                (preflight.stdout[1] | regex_replace('^MAC=', '') | trim | lower)
+                == (lookup('ansible.builtin.file', routeros_nic_mac_file) | trim | lower)
+            fail_msg: >-
+              {{ routeros_lan_interface }} has MAC {{ preflight.stdout[1] | regex_replace('^MAC=', '') }},
+              but the bridged NIC uses the MAC in {{ routeros_nic_mac_file }}.
+              Set routeros_lan_interface to the right interface.
+            quiet: true
+          when: routeros_nic_mac_file is file
+
+        - name: Show what will be configured
+          ansible.builtin.debug:
+            msg:
+              - "RouterOS {{ preflight.stdout[0] }}, {{ routeros_lan_interface }} {{ preflight.stdout[1] | regex_replace('^MAC=', '') }}"
+              - "{{ bgp_role }}: AS {{ bgp_local_as }} (router {{ routeros_router_id }}) <-> AS {{ metallb_as }} (nodes in {{ metallb_peer_range }})"
+              - "Accepting prefixes in {{ metallb_pool_prefix }}, multipath {{ bgp_multipath }}, BFD {{ 'on' if bfd_enabled else 'off' }}"
+
+    - name: Apply router configuration
+      ansible.builtin.include_tasks:
+        file: tasks/ensure.yml
+        apply:
+          tags: [config]
+      loop: "{{ routeros_objects }}"
+      loop_control:
+        loop_var: obj
+        label: "{{ obj.desc }}"
+      tags: [config]
+
+    - name: Verify BGP
+      tags: [verify]
+      block:
+        - name: Read BGP sessions and routes
+          community.routeros.command:
+            commands:
+              - /routing/bgp/session/print
+              - /ip/route/print where bgp
+              - /routing/bfd/session/print
+          register: bgp_state
+          changed_when: false
+
+        - name: Show BGP sessions and routes
+          ansible.builtin.debug:
+            msg:
+              - "BGP sessions:"
+              - "{{ bgp_state.stdout_lines[0] }}"
+              - "BGP routes:"
+              - "{{ bgp_state.stdout_lines[1] }}"
+              - "BFD sessions:"
+              - "{{ bgp_state.stdout_lines[2] }}"

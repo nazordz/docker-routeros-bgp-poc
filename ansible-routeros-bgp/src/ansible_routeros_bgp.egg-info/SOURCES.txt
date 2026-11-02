@@ -1,0 +1,6 @@
+README.md
+pyproject.toml
+src/ansible_routeros_bgp.egg-info/PKG-INFO
+src/ansible_routeros_bgp.egg-info/SOURCES.txt
+src/ansible_routeros_bgp.egg-info/dependency_links.txt
+src/ansible_routeros_bgp.egg-info/top_level.txt

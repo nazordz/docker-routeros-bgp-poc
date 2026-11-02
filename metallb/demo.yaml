@@ -1,0 +1,47 @@
+# Test app: nginx behind a LoadBalancer Service, to check that MetalLB announces its IP.
+#
+#   kubectl --context kind-routeros-lab apply -f metallb/demo.yaml
+#   kubectl --context kind-routeros-lab get svc web   # EXTERNAL-IP from lab-pool, e.g. 10.250.0.10
+#
+# Then on RouterOS: /ip/route print where bgp
+#                   /tool fetch url=http://10.250.0.10 output=user
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80
